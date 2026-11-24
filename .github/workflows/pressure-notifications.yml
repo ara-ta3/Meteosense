@@ -24,8 +24,7 @@ jobs:
         run: |
           rustup update stable
           cargo +stable build --locked --release
-      - name: Post scheduled notification
-        if: github.event_name == 'schedule'
+      - name: Post pressure notification
         env:
           METEOSENSE_LATITUDE: ${{ secrets.METEOSENSE_LATITUDE }}
           METEOSENSE_LONGITUDE: ${{ secrets.METEOSENSE_LONGITUDE }}
@@ -33,11 +32,3 @@ jobs:
           METEOSENSE_TIMEZONE: ${{ vars.METEOSENSE_TIMEZONE || 'Asia/Tokyo' }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: ./target/release/meteosense
-      - name: Preview sample notification
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          METEOSENSE_LATITUDE: '0'
-          METEOSENSE_LONGITUDE: '0'
-          METEOSENSE_LOCATION_NAME: Sample Location
-          METEOSENSE_TIMEZONE: Asia/Tokyo
-        run: ./target/release/meteosense --dry-run
