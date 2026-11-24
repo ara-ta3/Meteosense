@@ -1,18 +1,25 @@
 use std::fmt::Write as _;
 
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use ureq::Agent;
+use url::Url;
 
-use crate::config::WebhookUrl;
+use crate::config::SlackTarget;
 use crate::http::{request_error, response_error};
 use crate::pressure::{Analysis, IntervalChange, WindowChange};
 
 const SERVICE: &str = "Slack";
 const ATTRIBUTION: &str = "気象データ: Open-Meteo";
 const ATTRIBUTION_LINK: &str = "気象データ: <https://open-meteo.com/|Open-Meteo>";
+const CHART_FILENAME: &str = "pressure.png";
+const CHART_TITLE: &str = "前後24時間の気圧";
+const CHART_ALT_TEXT: &str = "前後24時間の気圧グラフ";
+const GET_UPLOAD_URL: &str = "https://slack.com/api/files.getUploadURLExternal";
+const COMPLETE_UPLOAD: &str = "https://slack.com/api/files.completeUploadExternal";
 
 pub(crate) struct Report {
     title: String,
@@ -66,7 +73,7 @@ impl Report {
         )
     }
 
-    fn payload(&self) -> Value {
+    fn blocks(&self) -> Vec<Value> {
         let mut blocks = vec![json!({
             "type": "header",
             "text": {"type": "plain_text", "text": self.title}
@@ -81,31 +88,124 @@ impl Report {
             "type": "context",
             "elements": [{"type": "mrkdwn", "text": ATTRIBUTION_LINK}]
         }));
+        blocks
+    }
+
+    fn complete_upload_body(&self, channel_id: &str, file_id: &str) -> Value {
         json!({
-            "text": self.text(),
-            "mrkdwn": false,
-            "blocks": blocks
+            "channel_id": channel_id,
+            "files": [{"id": file_id, "title": CHART_TITLE}],
+            "blocks": self.blocks(),
         })
     }
 }
 
-pub(crate) fn post(agent: &Agent, webhook: &WebhookUrl, report: &Report) -> Result<()> {
+pub(crate) fn post(
+    agent: &Agent,
+    target: &SlackTarget,
+    report: &Report,
+    chart_png: &[u8],
+) -> Result<()> {
+    ensure!(!chart_png.is_empty(), "Slackへ投稿する気圧グラフが空です");
+    let (upload_url, file_id) = request_upload_url(agent, target, chart_png.len())?;
+    upload_bytes(agent, &upload_url, chart_png)?;
+    complete_upload(agent, target, report, &file_id)?;
+    Ok(())
+}
+
+fn request_upload_url(agent: &Agent, target: &SlackTarget, length: usize) -> Result<(Url, String)> {
     let mut response = agent
-        .post(webhook.as_str())
-        .send_json(report.payload())
+        .post(GET_UPLOAD_URL)
+        .header("Authorization", format!("Bearer {}", target.bot_token()))
+        .send_form([
+            ("filename", CHART_FILENAME),
+            ("length", &length.to_string()),
+            ("alt_txt", CHART_ALT_TEXT),
+        ])
+        .map_err(|error| request_error(SERVICE, error))?;
+    let body: UploadUrlResponse = read_api_json(&mut response)?;
+    ensure_ok(body.ok, body.error.as_deref())?;
+    let upload_url = body
+        .upload_url
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("SlackからアップロードURLを受け取れませんでした"))?;
+    let file_id = body
+        .file_id
+        .ok_or_else(|| anyhow::anyhow!("SlackからファイルIDを受け取れませんでした"))?;
+    Ok((validated_upload_url(upload_url)?, file_id))
+}
+
+fn upload_bytes(agent: &Agent, upload_url: &Url, chart_png: &[u8]) -> Result<()> {
+    let response = agent
+        .post(upload_url.as_str())
+        .header("Content-Type", "application/octet-stream")
+        .send(chart_png)
         .map_err(|error| request_error(SERVICE, error))?;
     if !response.status().is_success() {
         return Err(response_error(SERVICE, response.status().as_u16()));
     }
-    let body = response
-        .body_mut()
-        .read_to_string()
-        .map_err(|error| request_error(SERVICE, error))?;
-    ensure!(
-        body.trim() == "ok",
-        "Slackから投稿成功の応答を受け取れませんでした"
-    );
     Ok(())
+}
+
+fn complete_upload(
+    agent: &Agent,
+    target: &SlackTarget,
+    report: &Report,
+    file_id: &str,
+) -> Result<()> {
+    let mut response = agent
+        .post(COMPLETE_UPLOAD)
+        .header("Authorization", format!("Bearer {}", target.bot_token()))
+        .send_json(report.complete_upload_body(target.channel_id(), file_id))
+        .map_err(|error| request_error(SERVICE, error))?;
+    let body: ApiStatus = read_api_json(&mut response)?;
+    ensure_ok(body.ok, body.error.as_deref())
+}
+
+fn validated_upload_url(value: &str) -> Result<Url> {
+    let url = Url::parse(value)
+        .map_err(|_| anyhow::anyhow!("Slackから想定外のアップロード先を受け取りました"))?;
+    ensure!(
+        url.scheme() == "https"
+            && matches!(
+                url.host_str(),
+                Some("files.slack.com" | "files.slack-gov.com")
+            )
+            && url.username().is_empty()
+            && url.password().is_none(),
+        "Slackから想定外のアップロード先を受け取りました"
+    );
+    Ok(url)
+}
+
+fn read_api_json<T: for<'de> Deserialize<'de>>(
+    response: &mut ureq::http::Response<ureq::Body>,
+) -> Result<T> {
+    if !response.status().is_success() {
+        return Err(response_error(SERVICE, response.status().as_u16()));
+    }
+    response
+        .body_mut()
+        .read_json()
+        .map_err(|error| request_error(SERVICE, error))
+}
+
+fn ensure_ok(ok: bool, error: Option<&str>) -> Result<()> {
+    if ok {
+        return Ok(());
+    }
+    match error {
+        Some(code)
+            if !code.is_empty()
+                && code.len() <= 64
+                && code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_') =>
+        {
+            bail!("Slack APIがエラーを返しました（{code}）")
+        }
+        _ => bail!("Slack APIがエラーを返しました"),
+    }
 }
 
 fn interval_text(title: &str, intervals: &[IntervalChange]) -> String {
@@ -141,14 +241,27 @@ fn local_time(time: DateTime<Utc>, timezone: Tz) -> String {
         .to_string()
 }
 
+#[derive(Deserialize)]
+struct UploadUrlResponse {
+    ok: bool,
+    error: Option<String>,
+    upload_url: Option<String>,
+    file_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ApiStatus {
+    ok: bool,
+    error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pressure::{HourlyPressure, Pressure, analyze};
     use chrono::{TimeDelta, TimeZone};
 
-    #[test]
-    fn generates_block_kit_payload_with_local_times_and_accessible_fallback() {
+    fn sample_report() -> Report {
         let reference = Utc.with_ymd_and_hms(2026, 1, 1, 9, 0, 0).unwrap();
         let hourly: HourlyPressure = (-24..=24)
             .map(|offset| {
@@ -164,8 +277,12 @@ mod tests {
             })
             .collect();
         let analysis = analyze(&hourly, reference).unwrap();
-        let report = Report::new(&analysis, "Sample Location", chrono_tz::Asia::Tokyo);
+        Report::new(&analysis, "Sample Location", chrono_tz::Asia::Tokyo)
+    }
 
+    #[test]
+    fn generates_block_kit_complete_upload_body_with_local_times() {
+        let report = sample_report();
         let summary = "2026-01-01 18:00 JST\n警戒レベル（気圧変化）: 警戒\n現在（0h）の推定海面更正気圧: 1013.2 hPa";
         let past = "過去の気圧変化（モデル値）\n差分 = 現在の気圧 − 各時点の気圧\n\
                     -24h: 1037.2 hPa（差分 -24.0 hPa）\n\
@@ -181,10 +298,16 @@ mod tests {
                       +24h: 1025.2 hPa（差分 +12.0 hPa）";
         let windows = "今後24時間の最大6時間低下量\n-6.0 hPa（2026-01-01 18:00 JST 〜 2026-01-02 00:00 JST）\n\n今後24時間の最大6時間上昇量\n+6.0 hPa（2026-01-02 00:00 JST 〜 2026-01-02 06:00 JST）\n大きな気圧上昇を予測";
         assert_eq!(
-            report.payload(),
+            report.text(),
+            format!(
+                "Meteosense | Sample Location\n\n{summary}\n\n{past}\n\n{future}\n\n{windows}\n\n気象データ: Open-Meteo"
+            )
+        );
+        assert_eq!(
+            report.complete_upload_body("C0123456789", "F012ABC3456"),
             json!({
-                "text": format!("Meteosense | Sample Location\n\n{summary}\n\n{past}\n\n{future}\n\n{windows}\n\n気象データ: Open-Meteo"),
-                "mrkdwn": false,
+                "channel_id": "C0123456789",
+                "files": [{"id": "F012ABC3456", "title": "前後24時間の気圧"}],
                 "blocks": [
                     {"type": "header", "text": {"type": "plain_text", "text": "Meteosense | Sample Location"}},
                     {"type": "section", "text": {"type": "plain_text", "text": summary}},
@@ -194,6 +317,34 @@ mod tests {
                     {"type": "context", "elements": [{"type": "mrkdwn", "text": "気象データ: <https://open-meteo.com/|Open-Meteo>"}]}
                 ]
             })
+        );
+    }
+
+    #[test]
+    fn accepts_slack_hosted_upload_urls_only() {
+        let url = validated_upload_url("https://files.slack.com/upload/v1/ABC123").unwrap();
+        assert_eq!(url.as_str(), "https://files.slack.com/upload/v1/ABC123");
+        assert_eq!(
+            validated_upload_url("https://evil.example/upload")
+                .unwrap_err()
+                .to_string(),
+            "Slackから想定外のアップロード先を受け取りました"
+        );
+    }
+
+    #[test]
+    fn keeps_api_error_codes_safe_to_display() {
+        assert_eq!(
+            ensure_ok(false, Some("invalid_auth"))
+                .unwrap_err()
+                .to_string(),
+            "Slack APIがエラーを返しました（invalid_auth）"
+        );
+        assert_eq!(
+            ensure_ok(false, Some("not ok <script>"))
+                .unwrap_err()
+                .to_string(),
+            "Slack APIがエラーを返しました"
         );
     }
 }

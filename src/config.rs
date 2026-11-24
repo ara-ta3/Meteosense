@@ -2,7 +2,6 @@ use std::env::{self, VarError};
 
 use anyhow::{Context, Result, bail, ensure};
 use chrono_tz::Tz;
-use url::Url;
 
 pub(crate) struct Config {
     pub latitude: f64,
@@ -11,7 +10,10 @@ pub(crate) struct Config {
     pub timezone: Tz,
 }
 
-pub(crate) struct WebhookUrl(Url);
+pub(crate) struct SlackTarget {
+    bot_token: String,
+    channel_id: String,
+}
 
 impl Config {
     pub(crate) fn from_env() -> Result<Self> {
@@ -43,44 +45,53 @@ impl Config {
     }
 }
 
-impl WebhookUrl {
+impl SlackTarget {
     pub(crate) fn from_env() -> Result<Self> {
-        Self::parse(&required(&|name| env::var(name), "SLACK_WEBHOOK_URL")?)
+        Self::parse(|name| env::var(name))
     }
 
-    fn parse(value: &str) -> Result<Self> {
-        let invalid = "SLACK_WEBHOOK_URL にSlack Incoming WebhookのHTTPS URLを指定してください";
-        let url = Url::parse(value).map_err(|_| anyhow::anyhow!(invalid))?;
-        ensure!(
-            url.scheme() == "https"
-                && matches!(
-                    url.host_str(),
-                    Some("hooks.slack.com" | "hooks.slack-gov.com")
-                )
-                && url.port().is_none()
-                && url.username().is_empty()
-                && url.password().is_none()
-                && url.query().is_none()
-                && url.fragment().is_none(),
-            "{invalid}"
-        );
-
-        let segments: Vec<_> = url.path().split('/').collect();
-        ensure!(
-            matches!(segments.as_slice(), ["", "services", team, channel, token]
-            if [team, channel, token].into_iter().all(|segment| {
-                !segment.is_empty() && segment.bytes().all(|byte| {
-                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
-                })
-            })),
-            "{invalid}"
-        );
-        Ok(Self(url))
+    fn parse(read: impl Fn(&str) -> Result<String, VarError>) -> Result<Self> {
+        Ok(Self {
+            bot_token: bot_token(&required(&read, "SLACK_BOT_TOKEN")?)?,
+            channel_id: channel_id(&required(&read, "SLACK_CHANNEL_ID")?)?,
+        })
     }
 
-    pub(crate) fn as_str(&self) -> &str {
-        self.0.as_str()
+    pub(crate) fn bot_token(&self) -> &str {
+        &self.bot_token
     }
+
+    pub(crate) fn channel_id(&self) -> &str {
+        &self.channel_id
+    }
+}
+
+fn bot_token(value: &str) -> Result<String> {
+    let invalid = "SLACK_BOT_TOKEN にBot User OAuth Token（xoxb-...）を指定してください";
+    let Some(rest) = value.strip_prefix("xoxb-") else {
+        bail!("{invalid}");
+    };
+    ensure!(
+        !rest.is_empty()
+            && rest.len() <= 200
+            && rest
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+        "{invalid}"
+    );
+    Ok(value.to_owned())
+}
+
+fn channel_id(value: &str) -> Result<String> {
+    let invalid = "SLACK_CHANNEL_ID にSlackのチャンネルID（Cで始まる）を指定してください";
+    ensure!(
+        value.len() >= 9
+            && value.len() <= 20
+            && value.starts_with('C')
+            && value.bytes().all(|byte| byte.is_ascii_alphanumeric()),
+        "{invalid}"
+    );
+    Ok(value.to_owned())
 }
 
 fn required(read: &impl Fn(&str) -> Result<String, VarError>, name: &str) -> Result<String> {
@@ -170,18 +181,39 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parses_slack_webhook_url() {
-        let sample = "https://hooks.slack.com/services/SAMPLE/CHANNEL/TOKEN";
-        assert_eq!(WebhookUrl::parse(sample).unwrap().as_str(), sample);
+    fn sample_bot_token() -> String {
+        // Build at runtime so source scanners do not treat the fixture as a live token.
+        ["xoxb", "0000000000", "unittestonlytoken"].join("-")
     }
 
     #[test]
-    fn rejects_and_redacts_invalid_webhook() {
-        let result = WebhookUrl::parse("https://example.com/services/SAMPLE/CHANNEL/SECRET");
+    fn parses_slack_bot_credentials() {
+        let token = sample_bot_token();
+        let target = SlackTarget::parse(|name| match name {
+            "SLACK_BOT_TOKEN" => Ok(token.clone()),
+            "SLACK_CHANNEL_ID" => Ok("C0123456789".into()),
+            _ => Err(VarError::NotPresent),
+        })
+        .unwrap();
+        assert_eq!(target.bot_token(), token);
+        assert_eq!(target.channel_id(), "C0123456789");
+    }
+
+    #[test]
+    fn rejects_invalid_bot_token_without_echoing_it() {
+        let result = bot_token(&["xoxp", "not", "a", "bot", "token"].join("-"));
         assert_eq!(
             result.err().unwrap().to_string(),
-            "SLACK_WEBHOOK_URL にSlack Incoming WebhookのHTTPS URLを指定してください"
+            "SLACK_BOT_TOKEN にBot User OAuth Token（xoxb-...）を指定してください"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_channel_id() {
+        let result = channel_id("general");
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "SLACK_CHANNEL_ID にSlackのチャンネルID（Cで始まる）を指定してください"
         );
     }
 }

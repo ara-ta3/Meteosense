@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use chrono::{Timelike, Utc};
 use clap::Parser;
 
-use crate::config::{Config, WebhookUrl};
+use crate::config::{Config, SlackTarget};
 
 #[derive(Parser)]
 #[command(about = "毎時の気圧データを分析してSlackに通知します")]
@@ -40,10 +40,10 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     let config = Config::from_env()?;
-    let webhook = if cli.dry_run {
+    let slack = if cli.dry_run {
         None
     } else {
-        Some(WebhookUrl::from_env()?)
+        Some(SlackTarget::from_env()?)
     };
 
     let now = Utc::now();
@@ -55,13 +55,30 @@ fn run(cli: Cli) -> Result<()> {
     let agent = http::agent();
     let hourly = weather::fetch(&agent, &config, reference)?;
     let analysis = pressure::analyze(&hourly, reference)?;
-    if let Some(path) = cli.chart {
-        chart::write_png(&hourly, reference, config.timezone, &path)?;
-    }
     let report = slack::Report::new(&analysis, &config.location_name, config.timezone);
+    let chart_png = if slack.is_some() || cli.chart.is_some() {
+        Some(chart::render_png(&hourly, reference, config.timezone)?)
+    } else {
+        None
+    };
+    if let Some(path) = cli.chart {
+        chart::save_png(
+            chart_png
+                .as_deref()
+                .context("気圧グラフの描画結果がありません")?,
+            &path,
+        )?;
+    }
 
-    match webhook {
-        Some(webhook) => slack::post(&agent, &webhook, &report),
+    match slack {
+        Some(target) => slack::post(
+            &agent,
+            &target,
+            &report,
+            chart_png
+                .as_deref()
+                .context("Slackへ投稿する気圧グラフがありません")?,
+        ),
         None => writeln!(io::stdout().lock(), "{}", report.text())
             .context("分析結果を標準出力に書き込めません"),
     }

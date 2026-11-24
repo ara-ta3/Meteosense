@@ -19,7 +19,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libfontconfig1-dev
+          sudo apt-get install -y --no-install-recommends fontconfig fonts-noto-cjk libfontconfig1-dev
       - name: Build CLI
         run: |
           rustup update stable
@@ -30,5 +30,6 @@ jobs:
           METEOSENSE_LONGITUDE: ${{ secrets.METEOSENSE_LONGITUDE }}
           METEOSENSE_LOCATION_NAME: ${{ secrets.METEOSENSE_LOCATION_NAME }}
           METEOSENSE_TIMEZONE: ${{ vars.METEOSENSE_TIMEZONE || 'Asia/Tokyo' }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
         run: ./target/release/meteosense
