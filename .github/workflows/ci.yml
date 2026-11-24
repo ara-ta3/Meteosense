@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Rust stable
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup component add rustfmt clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --locked --release
