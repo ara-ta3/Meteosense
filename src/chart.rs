@@ -1,3 +1,5 @@
+use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -15,22 +17,30 @@ const FONT_FAMILY: &str = if cfg!(target_os = "macos") {
     "Noto Sans CJK JP"
 };
 
-pub(crate) fn write_png(
+pub(crate) fn render_png(
     hourly: &HourlyPressure,
     reference: DateTime<Utc>,
     timezone: Tz,
-    output: &Path,
-) -> Result<()> {
+) -> Result<Vec<u8>> {
     let points = chart_points(hourly, reference)?;
+    let png =
+        NamedTempFile::with_suffix(".png").context("グラフ用の一時ファイルを作成できません")?;
+    draw_png(&points, reference.with_timezone(&timezone), png.path())
+        .context("気圧グラフを描画できません")?;
+    fs::read(png.path()).context("描画した気圧グラフを読み取れません")
+}
+
+pub(crate) fn save_png(png: &[u8], output: &Path) -> Result<()> {
     let directory = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let png = NamedTempFile::with_suffix_in(".png", directory)
+    let mut file = NamedTempFile::with_suffix_in(".png", directory)
         .context("グラフ出力先に一時ファイルを作成できません")?;
-    draw_png(&points, reference.with_timezone(&timezone), png.path())
-        .context("気圧グラフを描画できません")?;
-    png.persist_noclobber(output)
+    file.write_all(png)
+        .and_then(|()| file.flush())
+        .context("気圧グラフを一時ファイルへ書き込めません")?;
+    file.persist_noclobber(output)
         .map_err(|error| error.error)
         .with_context(|| format!("気圧グラフを保存できません（{}）", output.display()))?;
     Ok(())
@@ -206,19 +216,14 @@ mod tests {
     fn writes_a_png_even_when_every_pressure_is_the_same() {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("pressure.png");
+        let png = render_png(&hourly(1013.2), reference(), chrono_tz::Asia::Tokyo).unwrap();
+        save_png(&png, &output).unwrap();
 
-        write_png(
-            &hourly(1013.2),
-            reference(),
-            chrono_tz::Asia::Tokyo,
-            &output,
-        )
-        .unwrap();
-
-        let png = std::fs::read(output).unwrap();
-        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
-        assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 1200);
-        assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 680);
+        let saved = std::fs::read(output).unwrap();
+        assert_eq!(&saved[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(saved, png);
+        assert_eq!(u32::from_be_bytes(saved[16..20].try_into().unwrap()), 1200);
+        assert_eq!(u32::from_be_bytes(saved[20..24].try_into().unwrap()), 680);
     }
 
     #[test]
@@ -226,14 +231,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("pressure.png");
         std::fs::write(&output, b"existing contents").unwrap();
+        let png = render_png(&hourly(1013.2), reference(), chrono_tz::Asia::Tokyo).unwrap();
 
-        let error = write_png(
-            &hourly(1013.2),
-            reference(),
-            chrono_tz::Asia::Tokyo,
-            &output,
-        )
-        .unwrap_err();
+        let error = save_png(&png, &output).unwrap_err();
 
         assert_eq!(
             error
