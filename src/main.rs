@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use chrono::{Timelike, Utc};
 use clap::Parser;
 
-use crate::config::{Config, SlackTarget};
+use crate::config::{Config, SlackBot};
 
 #[derive(Parser)]
 #[command(about = "毎時の気圧データを分析してSlackに通知します")]
@@ -43,7 +43,7 @@ fn run(cli: Cli) -> Result<()> {
     let slack = if cli.dry_run {
         None
     } else {
-        Some(SlackTarget::from_env()?)
+        Some(SlackBot::from_env()?)
     };
 
     let now = Utc::now();

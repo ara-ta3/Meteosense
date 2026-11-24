@@ -8,9 +8,9 @@ use serde_json::{Value, json};
 use ureq::Agent;
 use url::Url;
 
-use crate::config::SlackTarget;
+use crate::config::SlackBot;
 use crate::http::{request_error, response_error};
-use crate::pressure::{Analysis, IntervalChange, WindowChange};
+use crate::pressure::{AlertLevel, Analysis, IntervalChange, WindowChange};
 
 const SERVICE: &str = "Slack";
 const ATTRIBUTION: &str = "気象データ: Open-Meteo";
@@ -18,77 +18,132 @@ const ATTRIBUTION_LINK: &str = "気象データ: <https://open-meteo.com/|Open-M
 const CHART_FILENAME: &str = "pressure.png";
 const CHART_TITLE: &str = "前後24時間の気圧";
 const CHART_ALT_TEXT: &str = "前後24時間の気圧グラフ";
+const USERS_CONVERSATIONS: &str = "https://slack.com/api/users.conversations";
 const GET_UPLOAD_URL: &str = "https://slack.com/api/files.getUploadURLExternal";
 const COMPLETE_UPLOAD: &str = "https://slack.com/api/files.completeUploadExternal";
 
 pub(crate) struct Report {
     title: String,
-    sections: [String; 4],
+    reference_local: String,
+    alert: AlertLevel,
+    current_hpa: f64,
+    past_lines: String,
+    future_lines: String,
+    max_drop: String,
+    max_rise: String,
+    large_rise: bool,
 }
 
 impl Report {
     pub(crate) fn new(analysis: &Analysis, location_name: &str, timezone: Tz) -> Self {
-        let summary = format!(
-            "{}\n警戒レベル（気圧変化）: {}\n現在（0h）の推定海面更正気圧: {:.1} hPa",
-            local_time(analysis.reference, timezone),
-            analysis.alert.label(),
-            analysis.current.rounded_hpa()
-        );
-        let windows = format!(
-            "今後24時間の最大6時間低下量\n{}\n\n今後24時間の最大6時間上昇量\n{}{}",
-            window_text(analysis.max_drop.as_ref(), timezone),
-            window_text(analysis.max_rise.as_ref(), timezone),
-            if analysis
-                .max_rise
-                .as_ref()
-                .is_some_and(WindowChange::is_large_rise)
-            {
-                "\n大きな気圧上昇を予測"
-            } else {
-                ""
-            }
-        );
         Self {
             title: format!("Meteosense | {location_name}"),
-            sections: [
-                summary,
-                interval_text(
-                    "過去の気圧変化（モデル値）\n差分 = 現在の気圧 − 各時点の気圧",
-                    &analysis.past,
-                ),
-                interval_text(
-                    "今後の気圧変化（予報）\n差分 = 各時点の気圧 − 現在の気圧",
-                    &analysis.future,
-                ),
-                windows,
-            ],
+            reference_local: local_time(analysis.reference, timezone),
+            alert: analysis.alert,
+            current_hpa: analysis.current.rounded_hpa(),
+            past_lines: interval_lines(&analysis.past),
+            future_lines: interval_lines(&analysis.future),
+            max_drop: window_text(analysis.max_drop.as_ref(), timezone),
+            max_rise: window_text(analysis.max_rise.as_ref(), timezone),
+            large_rise: analysis
+                .max_rise
+                .as_ref()
+                .is_some_and(WindowChange::is_large_rise),
         }
     }
 
     pub(crate) fn text(&self) -> String {
-        format!(
-            "{}\n\n{}\n\n{ATTRIBUTION}",
+        let mut text = format!(
+            "{}\n\n{}\n警戒レベル（気圧変化）: {}\n現在（0h）の推定海面更正気圧: {:.1} hPa\n\n\
+             過去の気圧変化（モデル値）\n差分 = 現在の気圧 − 各時点の気圧\n{}\n\n\
+             今後の気圧変化（予報）\n差分 = 各時点の気圧 − 現在の気圧\n{}\n\n\
+             今後24時間の最大6時間低下量\n{}\n\n今後24時間の最大6時間上昇量\n{}",
             self.title,
-            self.sections.join("\n\n")
-        )
+            self.reference_local,
+            self.alert.label(),
+            self.current_hpa,
+            self.past_lines,
+            self.future_lines,
+            self.max_drop,
+            self.max_rise,
+        );
+        if self.large_rise {
+            text.push_str("\n大きな気圧上昇を予測");
+        }
+        write!(text, "\n\n{ATTRIBUTION}").expect("Stringへの書き込みは失敗しない");
+        text
     }
 
     fn blocks(&self) -> Vec<Value> {
-        let mut blocks = vec![json!({
-            "type": "header",
-            "text": {"type": "plain_text", "text": self.title}
-        })];
-        blocks.extend(self.sections.iter().map(|text| {
+        let alert = self.alert.label();
+        let mut rise_note = String::new();
+        if self.large_rise {
+            rise_note.push_str("\n*大きな気圧上昇を予測*");
+        }
+        vec![
+            json!({
+                "type": "header",
+                "text": {"type": "plain_text", "text": self.title, "emoji": true}
+            }),
             json!({
                 "type": "section",
-                "text": {"type": "plain_text", "text": text}
-            })
-        }));
-        blocks.push(json!({
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": ATTRIBUTION_LINK}]
-        }));
-        blocks
+                "fields": [
+                    {
+                        "type": "mrkdwn",
+                        "text": format!("*基準時刻*\n{}", self.reference_local)
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": format!("*警戒レベル*\n*{alert}*")
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": format!("*現在の気圧（0h）*\n`{:.1}` hPa", self.current_hpa)
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": format!("*最大6時間低下*\n{}", self.max_drop)
+                    }
+                ]
+            }),
+            json!({"type": "divider"}),
+            json!({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": format!(
+                        "*過去の気圧変化（モデル値）*\n差分 = 現在の気圧 − 各時点の気圧\n```{}```",
+                        self.past_lines
+                    )
+                }
+            }),
+            json!({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": format!(
+                        "*今後の気圧変化（予報）*\n差分 = 各時点の気圧 − 現在の気圧\n```{}```",
+                        self.future_lines
+                    )
+                }
+            }),
+            json!({"type": "divider"}),
+            json!({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": format!(
+                        "*今後24時間の最大6時間変化*\n低下: {}\n上昇: {}{rise_note}",
+                        self.max_drop,
+                        self.max_rise
+                    )
+                }
+            }),
+            json!({
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": ATTRIBUTION_LINK}]
+            }),
+        ]
     }
 
     fn complete_upload_body(&self, channel_id: &str, file_id: &str) -> Value {
@@ -100,23 +155,70 @@ impl Report {
     }
 }
 
-pub(crate) fn post(
-    agent: &Agent,
-    target: &SlackTarget,
-    report: &Report,
-    chart_png: &[u8],
-) -> Result<()> {
+pub(crate) fn post(agent: &Agent, bot: &SlackBot, report: &Report, chart_png: &[u8]) -> Result<()> {
     ensure!(!chart_png.is_empty(), "Slackへ投稿する気圧グラフが空です");
-    let (upload_url, file_id) = request_upload_url(agent, target, chart_png.len())?;
+    let channel_id = resolve_channel_id(agent, bot)?;
+    let (upload_url, file_id) = request_upload_url(agent, bot, chart_png.len())?;
     upload_bytes(agent, &upload_url, chart_png)?;
-    complete_upload(agent, target, report, &file_id)?;
+    complete_upload(agent, bot, report, &channel_id, &file_id)?;
     Ok(())
 }
 
-fn request_upload_url(agent: &Agent, target: &SlackTarget, length: usize) -> Result<(Url, String)> {
+fn resolve_channel_id(agent: &Agent, bot: &SlackBot) -> Result<String> {
+    let mut cursor = String::new();
+    let mut selected: Option<(String, String)> = None;
+    loop {
+        let mut request = agent
+            .get(USERS_CONVERSATIONS)
+            .header("Authorization", format!("Bearer {}", bot.token()))
+            .query("types", "public_channel,private_channel")
+            .query("exclude_archived", "true")
+            .query("limit", "200");
+        if !cursor.is_empty() {
+            request = request.query("cursor", &cursor);
+        }
+        let mut response = request
+            .call()
+            .map_err(|error| request_error(SERVICE, error))?;
+        let body: ConversationsResponse = read_api_json(&mut response)?;
+        ensure_ok(body.ok, body.error.as_deref())?;
+        for channel in body.channels {
+            let id = channel.id.unwrap_or_default();
+            let name = channel.name.unwrap_or_else(|| id.clone());
+            ensure!(
+                is_channel_id(&id),
+                "Slackから想定外のチャンネルIDを受け取りました"
+            );
+            if let Some((_, existing_name)) = &selected {
+                bail!(
+                    "ボットが複数のチャンネルに参加しています（#{existing_name} / #{name}）。投稿先のチャンネルだけに招待してください"
+                );
+            }
+            selected = Some((id, name));
+        }
+        let next = body
+            .response_metadata
+            .and_then(|metadata| metadata.next_cursor)
+            .unwrap_or_default();
+        if next.is_empty() {
+            break;
+        }
+        if selected.is_some() {
+            bail!(
+                "ボットが複数のチャンネルに参加しています。投稿先のチャンネルだけに招待してください"
+            );
+        }
+        cursor = next;
+    }
+    selected.map(|(id, _)| id).ok_or_else(|| {
+        anyhow::anyhow!("ボットを投稿先チャンネルに招待してください（channels:read / groups:read / files:write）")
+    })
+}
+
+fn request_upload_url(agent: &Agent, bot: &SlackBot, length: usize) -> Result<(Url, String)> {
     let mut response = agent
         .post(GET_UPLOAD_URL)
-        .header("Authorization", format!("Bearer {}", target.bot_token()))
+        .header("Authorization", format!("Bearer {}", bot.token()))
         .send_form([
             ("filename", CHART_FILENAME),
             ("length", &length.to_string()),
@@ -149,14 +251,15 @@ fn upload_bytes(agent: &Agent, upload_url: &Url, chart_png: &[u8]) -> Result<()>
 
 fn complete_upload(
     agent: &Agent,
-    target: &SlackTarget,
+    bot: &SlackBot,
     report: &Report,
+    channel_id: &str,
     file_id: &str,
 ) -> Result<()> {
     let mut response = agent
         .post(COMPLETE_UPLOAD)
-        .header("Authorization", format!("Bearer {}", target.bot_token()))
-        .send_json(report.complete_upload_body(target.channel_id(), file_id))
+        .header("Authorization", format!("Bearer {}", bot.token()))
+        .send_json(report.complete_upload_body(channel_id, file_id))
         .map_err(|error| request_error(SERVICE, error))?;
     let body: ApiStatus = read_api_json(&mut response)?;
     ensure_ok(body.ok, body.error.as_deref())
@@ -176,6 +279,13 @@ fn validated_upload_url(value: &str) -> Result<Url> {
         "Slackから想定外のアップロード先を受け取りました"
     );
     Ok(url)
+}
+
+fn is_channel_id(value: &str) -> bool {
+    value.len() >= 9
+        && value.len() <= 20
+        && matches!(value.as_bytes().first(), Some(b'C' | b'G'))
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
 fn read_api_json<T: for<'de> Deserialize<'de>>(
@@ -208,12 +318,15 @@ fn ensure_ok(ok: bool, error: Option<&str>) -> Result<()> {
     }
 }
 
-fn interval_text(title: &str, intervals: &[IntervalChange]) -> String {
-    let mut text = title.to_owned();
-    for interval in intervals {
+fn interval_lines(intervals: &[IntervalChange]) -> String {
+    let mut text = String::new();
+    for (index, interval) in intervals.iter().enumerate() {
+        if index > 0 {
+            text.push('\n');
+        }
         write!(
             text,
-            "\n{:+}h: {:.1} hPa（差分 {:+.1} hPa）",
+            "{:+}h: {:.1} hPa（差分 {:+.1} hPa）",
             interval.offset_hours,
             interval.pressure.rounded_hpa(),
             interval.change.hpa()
@@ -239,6 +352,26 @@ fn local_time(time: DateTime<Utc>, timezone: Tz) -> String {
     time.with_timezone(&timezone)
         .format("%Y-%m-%d %H:%M %Z")
         .to_string()
+}
+
+#[derive(Deserialize)]
+struct ConversationsResponse {
+    ok: bool,
+    error: Option<String>,
+    #[serde(default)]
+    channels: Vec<Conversation>,
+    response_metadata: Option<ResponseMetadata>,
+}
+
+#[derive(Deserialize)]
+struct Conversation {
+    id: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ResponseMetadata {
+    next_cursor: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -281,26 +414,29 @@ mod tests {
     }
 
     #[test]
-    fn generates_block_kit_complete_upload_body_with_local_times() {
+    fn generates_rich_block_kit_complete_upload_body() {
         let report = sample_report();
-        let summary = "2026-01-01 18:00 JST\n警戒レベル（気圧変化）: 警戒\n現在（0h）の推定海面更正気圧: 1013.2 hPa";
-        let past = "過去の気圧変化（モデル値）\n差分 = 現在の気圧 − 各時点の気圧\n\
-                    -24h: 1037.2 hPa（差分 -24.0 hPa）\n\
+        let past = "-24h: 1037.2 hPa（差分 -24.0 hPa）\n\
                     -12h: 1025.2 hPa（差分 -12.0 hPa）\n\
                     -6h: 1019.2 hPa（差分 -6.0 hPa）\n\
                     -3h: 1016.2 hPa（差分 -3.0 hPa）\n\
                     -1h: 1014.2 hPa（差分 -1.0 hPa）";
-        let future = "今後の気圧変化（予報）\n差分 = 各時点の気圧 − 現在の気圧\n\
-                      +1h: 1012.2 hPa（差分 -1.0 hPa）\n\
+        let future = "+1h: 1012.2 hPa（差分 -1.0 hPa）\n\
                       +3h: 1010.2 hPa（差分 -3.0 hPa）\n\
                       +6h: 1007.2 hPa（差分 -6.0 hPa）\n\
                       +12h: 1013.2 hPa（差分 +0.0 hPa）\n\
                       +24h: 1025.2 hPa（差分 +12.0 hPa）";
-        let windows = "今後24時間の最大6時間低下量\n-6.0 hPa（2026-01-01 18:00 JST 〜 2026-01-02 00:00 JST）\n\n今後24時間の最大6時間上昇量\n+6.0 hPa（2026-01-02 00:00 JST 〜 2026-01-02 06:00 JST）\n大きな気圧上昇を予測";
+        let drop = "-6.0 hPa（2026-01-01 18:00 JST 〜 2026-01-02 00:00 JST）";
+        let rise = "+6.0 hPa（2026-01-02 00:00 JST 〜 2026-01-02 06:00 JST）";
         assert_eq!(
             report.text(),
             format!(
-                "Meteosense | Sample Location\n\n{summary}\n\n{past}\n\n{future}\n\n{windows}\n\n気象データ: Open-Meteo"
+                "Meteosense | Sample Location\n\n\
+                 2026-01-01 18:00 JST\n警戒レベル（気圧変化）: 警戒\n現在（0h）の推定海面更正気圧: 1013.2 hPa\n\n\
+                 過去の気圧変化（モデル値）\n差分 = 現在の気圧 − 各時点の気圧\n{past}\n\n\
+                 今後の気圧変化（予報）\n差分 = 各時点の気圧 − 現在の気圧\n{future}\n\n\
+                 今後24時間の最大6時間低下量\n{drop}\n\n今後24時間の最大6時間上昇量\n{rise}\n\
+                 大きな気圧上昇を予測\n\n気象データ: Open-Meteo"
             )
         );
         assert_eq!(
@@ -309,12 +445,52 @@ mod tests {
                 "channel_id": "C0123456789",
                 "files": [{"id": "F012ABC3456", "title": "前後24時間の気圧"}],
                 "blocks": [
-                    {"type": "header", "text": {"type": "plain_text", "text": "Meteosense | Sample Location"}},
-                    {"type": "section", "text": {"type": "plain_text", "text": summary}},
-                    {"type": "section", "text": {"type": "plain_text", "text": past}},
-                    {"type": "section", "text": {"type": "plain_text", "text": future}},
-                    {"type": "section", "text": {"type": "plain_text", "text": windows}},
-                    {"type": "context", "elements": [{"type": "mrkdwn", "text": "気象データ: <https://open-meteo.com/|Open-Meteo>"}]}
+                    {
+                        "type": "header",
+                        "text": {"type": "plain_text", "text": "Meteosense | Sample Location", "emoji": true}
+                    },
+                    {
+                        "type": "section",
+                        "fields": [
+                            {"type": "mrkdwn", "text": "*基準時刻*\n2026-01-01 18:00 JST"},
+                            {"type": "mrkdwn", "text": "*警戒レベル*\n*警戒*"},
+                            {"type": "mrkdwn", "text": "*現在の気圧（0h）*\n`1013.2` hPa"},
+                            {"type": "mrkdwn", "text": "*最大6時間低下*\n-6.0 hPa（2026-01-01 18:00 JST 〜 2026-01-02 00:00 JST）"}
+                        ]
+                    },
+                    {"type": "divider"},
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": format!(
+                                "*過去の気圧変化（モデル値）*\n差分 = 現在の気圧 − 各時点の気圧\n```{past}```"
+                            )
+                        }
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": format!(
+                                "*今後の気圧変化（予報）*\n差分 = 各時点の気圧 − 現在の気圧\n```{future}```"
+                            )
+                        }
+                    },
+                    {"type": "divider"},
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": format!(
+                                "*今後24時間の最大6時間変化*\n低下: {drop}\n上昇: {rise}\n*大きな気圧上昇を予測*"
+                            )
+                        }
+                    },
+                    {
+                        "type": "context",
+                        "elements": [{"type": "mrkdwn", "text": "気象データ: <https://open-meteo.com/|Open-Meteo>"}]
+                    }
                 ]
             })
         );
@@ -346,5 +522,13 @@ mod tests {
                 .to_string(),
             "Slack APIがエラーを返しました"
         );
+    }
+
+    #[test]
+    fn accepts_channel_ids_from_slack() {
+        assert!(is_channel_id("C0123456789"));
+        assert!(is_channel_id("G0123456789"));
+        assert!(!is_channel_id("general"));
+        assert!(!is_channel_id("D0123456789"));
     }
 }

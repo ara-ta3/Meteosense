@@ -10,9 +10,8 @@ pub(crate) struct Config {
     pub timezone: Tz,
 }
 
-pub(crate) struct SlackTarget {
-    bot_token: String,
-    channel_id: String,
+pub(crate) struct SlackBot {
+    token: String,
 }
 
 impl Config {
@@ -45,24 +44,19 @@ impl Config {
     }
 }
 
-impl SlackTarget {
+impl SlackBot {
     pub(crate) fn from_env() -> Result<Self> {
         Self::parse(|name| env::var(name))
     }
 
     fn parse(read: impl Fn(&str) -> Result<String, VarError>) -> Result<Self> {
         Ok(Self {
-            bot_token: bot_token(&required(&read, "SLACK_BOT_TOKEN")?)?,
-            channel_id: channel_id(&required(&read, "SLACK_CHANNEL_ID")?)?,
+            token: bot_token(&required(&read, "SLACK_BOT_TOKEN")?)?,
         })
     }
 
-    pub(crate) fn bot_token(&self) -> &str {
-        &self.bot_token
-    }
-
-    pub(crate) fn channel_id(&self) -> &str {
-        &self.channel_id
+    pub(crate) fn token(&self) -> &str {
+        &self.token
     }
 }
 
@@ -77,18 +71,6 @@ fn bot_token(value: &str) -> Result<String> {
             && rest
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
-        "{invalid}"
-    );
-    Ok(value.to_owned())
-}
-
-fn channel_id(value: &str) -> Result<String> {
-    let invalid = "SLACK_CHANNEL_ID にSlackのチャンネルID（Cで始まる）を指定してください";
-    ensure!(
-        value.len() >= 9
-            && value.len() <= 20
-            && value.starts_with('C')
-            && value.bytes().all(|byte| byte.is_ascii_alphanumeric()),
         "{invalid}"
     );
     Ok(value.to_owned())
@@ -187,16 +169,14 @@ mod tests {
     }
 
     #[test]
-    fn parses_slack_bot_credentials() {
+    fn parses_slack_bot_token() {
         let token = sample_bot_token();
-        let target = SlackTarget::parse(|name| match name {
+        let bot = SlackBot::parse(|name| match name {
             "SLACK_BOT_TOKEN" => Ok(token.clone()),
-            "SLACK_CHANNEL_ID" => Ok("C0123456789".into()),
             _ => Err(VarError::NotPresent),
         })
         .unwrap();
-        assert_eq!(target.bot_token(), token);
-        assert_eq!(target.channel_id(), "C0123456789");
+        assert_eq!(bot.token(), token);
     }
 
     #[test]
@@ -205,15 +185,6 @@ mod tests {
         assert_eq!(
             result.err().unwrap().to_string(),
             "SLACK_BOT_TOKEN にBot User OAuth Token（xoxb-...）を指定してください"
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_channel_id() {
-        let result = channel_id("general");
-        assert_eq!(
-            result.err().unwrap().to_string(),
-            "SLACK_CHANNEL_ID にSlackのチャンネルID（Cで始まる）を指定してください"
         );
     }
 }
