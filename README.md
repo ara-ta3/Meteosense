@@ -35,12 +35,13 @@ cargo build --locked --release
 | `METEOSENSE_LOCATION_NAME` | 通知に表示する地点名。130文字以内 |
 | `METEOSENSE_TIMEZONE` | 表示用のIANAタイムゾーン。省略時は `Asia/Tokyo` |
 | `SLACK_BOT_TOKEN` | SlackアプリのBot User OAuth Token（`xoxb-...`）。通常実行時に必須 |
+| `SLACK_CHANNEL_ID` | 投稿先チャンネルのID（`C`または`G`で始まる）。通常実行時に必須 |
 
-通常実行では分析結果を Block Kit のリッチなメッセージとして投稿し、前後24時間の気圧グラフPNGを同じメッセージに添付する。Incoming Webhookではファイルを添付できないため、[Slack Web API](https://docs.slack.dev/messaging/working-with-files/) のファイルアップロードを使う。投稿先はボットが参加しているチャンネルを自動で解決する（ちょうど1つであること）。
+通常実行では分析結果を Block Kit のリッチなメッセージとして投稿し、前後24時間の気圧グラフPNGを同じメッセージに添付する。Incoming Webhookではファイルを添付できないため、[Slack Web API](https://docs.slack.dev/messaging/working-with-files/) のファイルアップロードを使う。
 
-1. [Slack API](https://api.slack.com/apps) でアプリを作成し、OAuth & Permissions の Bot Token Scopes に `files:write`、`channels:read`、`groups:read` を追加する。
+1. [Slack API](https://api.slack.com/apps) でアプリを作成し、OAuth & Permissions の Bot Token Scopes に `files:write` を追加する。
 2. ワークスペースへインストールし、Bot User OAuth Token を `SLACK_BOT_TOKEN` に設定する。
-3. 投稿先チャンネルだけにボットを招待する。複数チャンネルへ参加しているとエラーになる。
+3. 投稿先チャンネルにボットを招待し、チャンネル詳細からチャンネルIDをコピーして `SLACK_CHANNEL_ID` に設定する。
 
 Bot Tokenは秘密情報として扱い、`.env` の読み取り権限を利用者に限定する。
 
@@ -74,9 +75,9 @@ Plottersで、Open-Meteoから取得した差分計算前の毎時気圧49点を
 
 `Pressure notifications` ワークフローは、デフォルトブランチに反映されると毎時5分（UTC）に起動し、Slackへ通知する。リポジトリの **Settings → Secrets and variables → Actions** で次の値を設定する。
 
-- **Secrets** に `METEOSENSE_LATITUDE`、`METEOSENSE_LONGITUDE`、`METEOSENSE_LOCATION_NAME`、`SLACK_BOT_TOKEN` を登録する。
+- **Secrets** に `METEOSENSE_LATITUDE`、`METEOSENSE_LONGITUDE`、`METEOSENSE_LOCATION_NAME`、`SLACK_BOT_TOKEN`、`SLACK_CHANNEL_ID` を登録する。
 - 表示タイムゾーンを変更する場合は **Variables** に `METEOSENSE_TIMEZONE` を登録する。省略時は `Asia/Tokyo` を使う。
-- 以前の `SLACK_WEBHOOK_URL` や `SLACK_CHANNEL_ID` は使わない。Bot Token一本と、投稿先チャンネルへのボット招待に置き換える。
+- 以前の `SLACK_WEBHOOK_URL` は使わない。グラフ付き投稿のため Bot Token とチャンネルIDに置き換える。
 
 Actionsから手動実行しても、定期実行と同じ設定でSlackへ投稿する。定期実行は混雑時に遅延・欠落する場合があり、公開リポジトリで60日間アクティビティがないと自動停止する。[GitHub Actionsのスケジュール仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
 

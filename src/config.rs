@@ -12,6 +12,7 @@ pub(crate) struct Config {
 
 pub(crate) struct SlackBot {
     token: String,
+    channel_id: String,
 }
 
 impl Config {
@@ -52,11 +53,16 @@ impl SlackBot {
     fn parse(read: impl Fn(&str) -> Result<String, VarError>) -> Result<Self> {
         Ok(Self {
             token: bot_token(&required(&read, "SLACK_BOT_TOKEN")?)?,
+            channel_id: channel_id(&required(&read, "SLACK_CHANNEL_ID")?)?,
         })
     }
 
     pub(crate) fn token(&self) -> &str {
         &self.token
+    }
+
+    pub(crate) fn channel_id(&self) -> &str {
+        &self.channel_id
     }
 }
 
@@ -71,6 +77,18 @@ fn bot_token(value: &str) -> Result<String> {
             && rest
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+        "{invalid}"
+    );
+    Ok(value.to_owned())
+}
+
+fn channel_id(value: &str) -> Result<String> {
+    let invalid = "SLACK_CHANNEL_ID にSlackのチャンネルID（CまたはGで始まる）を指定してください";
+    ensure!(
+        value.len() >= 9
+            && value.len() <= 20
+            && matches!(value.as_bytes().first(), Some(b'C' | b'G'))
+            && value.bytes().all(|byte| byte.is_ascii_alphanumeric()),
         "{invalid}"
     );
     Ok(value.to_owned())
@@ -169,14 +187,16 @@ mod tests {
     }
 
     #[test]
-    fn parses_slack_bot_token() {
+    fn parses_slack_bot_token_and_channel() {
         let token = sample_bot_token();
         let bot = SlackBot::parse(|name| match name {
             "SLACK_BOT_TOKEN" => Ok(token.clone()),
+            "SLACK_CHANNEL_ID" => Ok("C0123456789".into()),
             _ => Err(VarError::NotPresent),
         })
         .unwrap();
         assert_eq!(bot.token(), token);
+        assert_eq!(bot.channel_id(), "C0123456789");
     }
 
     #[test]
@@ -185,6 +205,15 @@ mod tests {
         assert_eq!(
             result.err().unwrap().to_string(),
             "SLACK_BOT_TOKEN にBot User OAuth Token（xoxb-...）を指定してください"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_channel_id() {
+        let result = channel_id("general");
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "SLACK_CHANNEL_ID にSlackのチャンネルID（CまたはGで始まる）を指定してください"
         );
     }
 }

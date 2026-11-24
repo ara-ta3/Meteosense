@@ -18,7 +18,6 @@ const ATTRIBUTION_LINK: &str = "気象データ: <https://open-meteo.com/|Open-M
 const CHART_FILENAME: &str = "pressure.png";
 const CHART_TITLE: &str = "前後24時間の気圧";
 const CHART_ALT_TEXT: &str = "前後24時間の気圧グラフ";
-const USERS_CONVERSATIONS: &str = "https://slack.com/api/users.conversations";
 const GET_UPLOAD_URL: &str = "https://slack.com/api/files.getUploadURLExternal";
 const COMPLETE_UPLOAD: &str = "https://slack.com/api/files.completeUploadExternal";
 
@@ -157,62 +156,10 @@ impl Report {
 
 pub(crate) fn post(agent: &Agent, bot: &SlackBot, report: &Report, chart_png: &[u8]) -> Result<()> {
     ensure!(!chart_png.is_empty(), "Slackへ投稿する気圧グラフが空です");
-    let channel_id = resolve_channel_id(agent, bot)?;
     let (upload_url, file_id) = request_upload_url(agent, bot, chart_png.len())?;
     upload_bytes(agent, &upload_url, chart_png)?;
-    complete_upload(agent, bot, report, &channel_id, &file_id)?;
+    complete_upload(agent, bot, report, bot.channel_id(), &file_id)?;
     Ok(())
-}
-
-fn resolve_channel_id(agent: &Agent, bot: &SlackBot) -> Result<String> {
-    let mut cursor = String::new();
-    let mut selected: Option<(String, String)> = None;
-    loop {
-        let mut request = agent
-            .get(USERS_CONVERSATIONS)
-            .header("Authorization", format!("Bearer {}", bot.token()))
-            .query("types", "public_channel,private_channel")
-            .query("exclude_archived", "true")
-            .query("limit", "200");
-        if !cursor.is_empty() {
-            request = request.query("cursor", &cursor);
-        }
-        let mut response = request
-            .call()
-            .map_err(|error| request_error(SERVICE, error))?;
-        let body: ConversationsResponse = read_api_json(&mut response)?;
-        ensure_ok(body.ok, body.error.as_deref())?;
-        for channel in body.channels {
-            let id = channel.id.unwrap_or_default();
-            let name = channel.name.unwrap_or_else(|| id.clone());
-            ensure!(
-                is_channel_id(&id),
-                "Slackから想定外のチャンネルIDを受け取りました"
-            );
-            if let Some((_, existing_name)) = &selected {
-                bail!(
-                    "ボットが複数のチャンネルに参加しています（#{existing_name} / #{name}）。投稿先のチャンネルだけに招待してください"
-                );
-            }
-            selected = Some((id, name));
-        }
-        let next = body
-            .response_metadata
-            .and_then(|metadata| metadata.next_cursor)
-            .unwrap_or_default();
-        if next.is_empty() {
-            break;
-        }
-        if selected.is_some() {
-            bail!(
-                "ボットが複数のチャンネルに参加しています。投稿先のチャンネルだけに招待してください"
-            );
-        }
-        cursor = next;
-    }
-    selected.map(|(id, _)| id).ok_or_else(|| {
-        anyhow::anyhow!("ボットを投稿先チャンネルに招待してください（channels:read / groups:read / files:write）")
-    })
 }
 
 fn request_upload_url(agent: &Agent, bot: &SlackBot, length: usize) -> Result<(Url, String)> {
@@ -281,13 +228,6 @@ fn validated_upload_url(value: &str) -> Result<Url> {
     Ok(url)
 }
 
-fn is_channel_id(value: &str) -> bool {
-    value.len() >= 9
-        && value.len() <= 20
-        && matches!(value.as_bytes().first(), Some(b'C' | b'G'))
-        && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
-}
-
 fn read_api_json<T: for<'de> Deserialize<'de>>(
     response: &mut ureq::http::Response<ureq::Body>,
 ) -> Result<T> {
@@ -352,26 +292,6 @@ fn local_time(time: DateTime<Utc>, timezone: Tz) -> String {
     time.with_timezone(&timezone)
         .format("%Y-%m-%d %H:%M %Z")
         .to_string()
-}
-
-#[derive(Deserialize)]
-struct ConversationsResponse {
-    ok: bool,
-    error: Option<String>,
-    #[serde(default)]
-    channels: Vec<Conversation>,
-    response_metadata: Option<ResponseMetadata>,
-}
-
-#[derive(Deserialize)]
-struct Conversation {
-    id: Option<String>,
-    name: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ResponseMetadata {
-    next_cursor: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -522,13 +442,5 @@ mod tests {
                 .to_string(),
             "Slack APIがエラーを返しました"
         );
-    }
-
-    #[test]
-    fn accepts_channel_ids_from_slack() {
-        assert!(is_channel_id("C0123456789"));
-        assert!(is_channel_id("G0123456789"));
-        assert!(!is_channel_id("general"));
-        assert!(!is_channel_id("D0123456789"));
     }
 }

@@ -31,4 +31,5 @@ jobs:
           METEOSENSE_LOCATION_NAME: ${{ secrets.METEOSENSE_LOCATION_NAME }}
           METEOSENSE_TIMEZONE: ${{ vars.METEOSENSE_TIMEZONE || 'Asia/Tokyo' }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
         run: ./target/release/meteosense
