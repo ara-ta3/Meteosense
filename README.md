@@ -71,7 +71,7 @@ PNGは指定したパスに保存する。Slackには従来のテキスト通知
 - **Secrets** に `METEOSENSE_LATITUDE`、`METEOSENSE_LONGITUDE`、`METEOSENSE_LOCATION_NAME`、`SLACK_WEBHOOK_URL` を登録する。
 - 表示タイムゾーンを変更する場合は **Variables** に `METEOSENSE_TIMEZONE` を登録する。省略時は `Asia/Tokyo` を使う。
 
-Actionsから手動実行すると、サンプル地点の通知プレビューが実行ログに表示される。Slackに投稿するのは定期実行時のみ。定期実行は混雑時に遅延・欠落する場合があり、公開リポジトリで60日間アクティビティがないと自動停止する。[GitHub Actionsのスケジュール仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
+Actionsから手動実行した場合も、定期実行と同じ地点設定とWebhookを使い、Slackへ通知する。定期実行は混雑時に遅延・欠落する場合があり、公開リポジトリで60日間アクティビティがないと自動停止する。[GitHub Actionsのスケジュール仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
 
 #### macOSのcron
 
