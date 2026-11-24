@@ -64,6 +64,17 @@ PNGは指定したパスに保存する。Slackには従来のテキスト通知
 
 ### 毎時実行
 
+#### GitHub Actions
+
+`Pressure notifications` ワークフローは、デフォルトブランチに反映されると毎時5分（UTC）に起動し、Slackへ通知する。リポジトリの **Settings → Secrets and variables → Actions** で次の値を設定する。
+
+- **Secrets** に `METEOSENSE_LATITUDE`、`METEOSENSE_LONGITUDE`、`METEOSENSE_LOCATION_NAME`、`SLACK_WEBHOOK_URL` を登録する。
+- 表示タイムゾーンを変更する場合は **Variables** に `METEOSENSE_TIMEZONE` を登録する。省略時は `Asia/Tokyo` を使う。
+
+Actionsから手動実行すると、サンプル地点の通知プレビューが実行ログに表示される。Slackに投稿するのは定期実行時のみ。定期実行は混雑時に遅延・欠落する場合があり、公開リポジトリで60日間アクティビティがないと自動停止する。[GitHub Actionsのスケジュール仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
+
+#### macOSのcron
+
 先に手動実行で設定を確認し、`crontab -e` で次のような行を追加する。設定ファイルとバイナリは実際の絶対パスに置き換える。例では毎時5分に実行する。
 
 ```cron
