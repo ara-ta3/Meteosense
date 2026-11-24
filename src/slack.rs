@@ -22,10 +22,10 @@ pub(crate) struct Report {
 impl Report {
     pub(crate) fn new(analysis: &Analysis, location_name: &str, timezone: Tz) -> Self {
         let summary = format!(
-            "{}\n警戒レベル（気圧変化）: {}\n現在の推定海面更正気圧: {:.1} hPa",
+            "{}\n警戒レベル（気圧変化）: {}\n現在（0h）の推定海面更正気圧: {:.1} hPa",
             local_time(analysis.reference, timezone),
             analysis.alert.label(),
-            analysis.current.hpa()
+            analysis.current.rounded_hpa()
         );
         let windows = format!(
             "今後24時間の最大6時間低下量\n{}\n\n今後24時間の最大6時間上昇量\n{}{}",
@@ -45,8 +45,14 @@ impl Report {
             title: format!("Meteosense | {location_name}"),
             sections: [
                 summary,
-                interval_text("過去の気圧変化（モデル値）", &analysis.past),
-                interval_text("今後の気圧変化（予報）", &analysis.future),
+                interval_text(
+                    "過去の気圧変化（モデル値）\n差分 = 現在の気圧 − 各時点の気圧",
+                    &analysis.past,
+                ),
+                interval_text(
+                    "今後の気圧変化（予報）\n差分 = 各時点の気圧 − 現在の気圧",
+                    &analysis.future,
+                ),
                 windows,
             ],
         }
@@ -107,8 +113,9 @@ fn interval_text(title: &str, intervals: &[IntervalChange]) -> String {
     for interval in intervals {
         write!(
             text,
-            "\n{:>2}h: {:+.1} hPa",
-            interval.hours,
+            "\n{:+}h: {:.1} hPa（差分 {:+.1} hPa）",
+            interval.offset_hours,
+            interval.pressure.rounded_hpa(),
             interval.change.hpa()
         )
         .expect("Stringへの書き込みは失敗しない");
@@ -159,9 +166,19 @@ mod tests {
         let analysis = analyze(&hourly, reference).unwrap();
         let report = Report::new(&analysis, "Sample Location", chrono_tz::Asia::Tokyo);
 
-        let summary = "2026-01-01 18:00 JST\n警戒レベル（気圧変化）: 警戒\n現在の推定海面更正気圧: 1013.2 hPa";
-        let past = "過去の気圧変化（モデル値）\n 1h: -1.0 hPa\n 3h: -3.0 hPa\n 6h: -6.0 hPa\n12h: -12.0 hPa\n24h: -24.0 hPa";
-        let future = "今後の気圧変化（予報）\n 1h: -1.0 hPa\n 3h: -3.0 hPa\n 6h: -6.0 hPa\n12h: +0.0 hPa\n24h: +12.0 hPa";
+        let summary = "2026-01-01 18:00 JST\n警戒レベル（気圧変化）: 警戒\n現在（0h）の推定海面更正気圧: 1013.2 hPa";
+        let past = "過去の気圧変化（モデル値）\n差分 = 現在の気圧 − 各時点の気圧\n\
+                    -24h: 1037.2 hPa（差分 -24.0 hPa）\n\
+                    -12h: 1025.2 hPa（差分 -12.0 hPa）\n\
+                    -6h: 1019.2 hPa（差分 -6.0 hPa）\n\
+                    -3h: 1016.2 hPa（差分 -3.0 hPa）\n\
+                    -1h: 1014.2 hPa（差分 -1.0 hPa）";
+        let future = "今後の気圧変化（予報）\n差分 = 各時点の気圧 − 現在の気圧\n\
+                      +1h: 1012.2 hPa（差分 -1.0 hPa）\n\
+                      +3h: 1010.2 hPa（差分 -3.0 hPa）\n\
+                      +6h: 1007.2 hPa（差分 -6.0 hPa）\n\
+                      +12h: 1013.2 hPa（差分 +0.0 hPa）\n\
+                      +24h: 1025.2 hPa（差分 +12.0 hPa）";
         let windows = "今後24時間の最大6時間低下量\n-6.0 hPa（2026-01-01 18:00 JST 〜 2026-01-02 00:00 JST）\n\n今後24時間の最大6時間上昇量\n+6.0 hPa（2026-01-02 00:00 JST 〜 2026-01-02 06:00 JST）\n大きな気圧上昇を予測";
         assert_eq!(
             report.payload(),

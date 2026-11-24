@@ -17,6 +17,7 @@ fn help_is_available_without_a_webhook() {
     assert_eq!(output.status.code(), Some(0));
     let help = String::from_utf8(output.stdout).unwrap();
     assert!(help.contains("--dry-run"), "{help}");
+    assert!(help.contains("--chart <PNG>"), "{help}");
     assert!(help.contains("--help"), "{help}");
     assert_eq!(output.stderr, b"");
 }
