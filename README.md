@@ -100,6 +100,18 @@ UTCで現在の時刻を時単位に切り下げ、基準時刻の24時間前か
 
 6時間で6 hPa以上の上昇が予測される場合は、大きな気圧上昇として併記する。警戒レベルは気圧変化に対する独自の暫定基準であり、医学的な根拠が確立した基準や症状の予測としては扱えない。
 
+## 依存関係の更新
+
+[Renovate](https://docs.renovatebot.com/) が週次で依存関係を確認し、Cargo と GitHub Actions をそれぞれまとめた PR を作成する。CI が通った PR は GitHub の auto-merge で取り込む。
+
+初回のみ次を有効にする。
+
+1. [Renovate GitHub App](https://github.com/apps/renovate) をこのリポジトリにインストールする
+2. **Settings → General → Pull Requests** で **Allow auto-merge** を有効にする
+3. 推奨: `main` に branch protection を置き、CI（`rust`）を必須ステータスにする。必須チェックがあると、auto-merge は CI 成功後に実行される
+
+設定はリポジトリ直下の `renovate.json` を参照する。
+
 ## 気象データ
 
 出典は [Open-Meteo Weather Forecast API](https://open-meteo.com/en/docs)。海面更正気圧（`pressure_msl`）は地点の標高での気圧とは異なる。過去時刻の値にも気象モデルに基づく推定値が含まれ、観測地点での実測を示すものではない。通知する変化量は取得値からMeteosenseが算出する。
