@@ -8,8 +8,8 @@ pub(crate) const HORIZON_HOURS: usize = 24;
 const WINDOW_HOURS: usize = 6;
 const TENTHS_PER_HPA: f64 = 10.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Pressure(i32);
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Pressure(f64);
 
 impl Pressure {
     pub(crate) fn from_hpa(value: f64) -> Result<Self> {
@@ -18,15 +18,23 @@ impl Pressure {
             (1.0..=f64::from(i32::MAX)).contains(&tenths),
             "気圧に不正な値が含まれています"
         );
-        Ok(Self(tenths as i32))
+        Ok(Self(value))
     }
 
     pub(crate) fn hpa(self) -> f64 {
-        f64::from(self.0) / TENTHS_PER_HPA
+        self.0
+    }
+
+    pub(crate) fn rounded_hpa(self) -> f64 {
+        f64::from(self.tenths()) / TENTHS_PER_HPA
+    }
+
+    fn tenths(self) -> i32 {
+        (self.0 * TENTHS_PER_HPA).round() as i32
     }
 
     fn change_since(self, earlier: Self) -> PressureChange {
-        PressureChange(self.0 - earlier.0)
+        PressureChange(self.tenths() - earlier.tenths())
     }
 }
 
@@ -85,9 +93,10 @@ impl WindowChange {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct IntervalChange {
-    pub hours: usize,
+    pub offset_hours: i64,
+    pub pressure: Pressure,
     pub change: PressureChange,
 }
 
@@ -119,10 +128,13 @@ pub(crate) fn analyze(hourly: &HourlyPressure, reference: DateTime<Utc>) -> Resu
 
     let past = OFFSETS_HOURS
         .into_iter()
+        .rev()
         .map(|hours| {
-            let earlier = pressure_at(reference - TimeDelta::hours(hours as i64))?;
+            let offset_hours = -(hours as i64);
+            let earlier = pressure_at(reference + TimeDelta::hours(offset_hours))?;
             Ok(IntervalChange {
-                hours,
+                offset_hours,
+                pressure: earlier,
                 change: current.change_since(earlier),
             })
         })
@@ -130,7 +142,8 @@ pub(crate) fn analyze(hourly: &HourlyPressure, reference: DateTime<Utc>) -> Resu
     let future = OFFSETS_HOURS
         .into_iter()
         .map(|hours| IntervalChange {
-            hours,
+            offset_hours: hours as i64,
+            pressure: forecast[hours],
             change: forecast[hours].change_since(current),
         })
         .collect();
@@ -182,7 +195,7 @@ mod tests {
             .map(|offset| {
                 (
                     reference() + TimeDelta::hours(offset),
-                    Pressure(pressure(offset)),
+                    Pressure(f64::from(pressure(offset)) / TENTHS_PER_HPA),
                 )
             })
             .collect()
@@ -192,31 +205,32 @@ mod tests {
     fn calculates_later_minus_earlier_for_each_interval() {
         let hourly = hourly_series(|offset| 10130 + offset as i32 * 2);
         let result = analyze(&hourly, reference()).unwrap();
-        let expected = [
-            IntervalChange {
-                hours: 1,
-                change: PressureChange(2),
-            },
-            IntervalChange {
-                hours: 3,
-                change: PressureChange(6),
-            },
-            IntervalChange {
-                hours: 6,
-                change: PressureChange(12),
-            },
-            IntervalChange {
-                hours: 12,
-                change: PressureChange(24),
-            },
-            IntervalChange {
-                hours: 24,
-                change: PressureChange(48),
-            },
-        ];
-        assert_eq!(result.current, Pressure(10130));
-        assert_eq!(result.past, expected);
-        assert_eq!(result.future, expected);
+        let point = |offset_hours, pressure, change| IntervalChange {
+            offset_hours,
+            pressure: Pressure(f64::from(pressure) / TENTHS_PER_HPA),
+            change: PressureChange(change),
+        };
+        assert_eq!(result.current, Pressure(1013.0));
+        assert_eq!(
+            result.past,
+            [
+                point(-24, 10082, 48),
+                point(-12, 10106, 24),
+                point(-6, 10118, 12),
+                point(-3, 10124, 6),
+                point(-1, 10128, 2),
+            ]
+        );
+        assert_eq!(
+            result.future,
+            [
+                point(1, 10132, 2),
+                point(3, 10136, 6),
+                point(6, 10142, 12),
+                point(12, 10154, 24),
+                point(24, 10178, 48),
+            ]
+        );
         assert_eq!(result.max_drop, None);
         assert_eq!(result.alert, AlertLevel::Normal);
     }
@@ -268,5 +282,13 @@ mod tests {
         assert_eq!(alert_for(PressureChange(-40)), AlertLevel::Caution);
         assert_eq!(alert_for(PressureChange(-59)), AlertLevel::Caution);
         assert_eq!(alert_for(PressureChange(-60)), AlertLevel::Warning);
+    }
+
+    #[test]
+    fn rounds_each_pressure_to_tenths_before_calculating_a_change() {
+        let current = Pressure::from_hpa(1013.24).unwrap();
+        let earlier = Pressure::from_hpa(1011.25).unwrap();
+
+        assert_eq!(current.change_since(earlier), PressureChange(19));
     }
 }

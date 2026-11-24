@@ -1,3 +1,4 @@
+mod chart;
 mod config;
 mod http;
 mod pressure;
@@ -5,6 +6,7 @@ mod slack;
 mod weather;
 
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
@@ -18,6 +20,12 @@ use crate::config::{Config, WebhookUrl};
 struct Cli {
     #[arg(long, help = "Slackに投稿せず、分析結果を標準出力に表示する")]
     dry_run: bool,
+    #[arg(
+        long,
+        value_name = "PNG",
+        help = "指定したパスに気圧グラフのPNGを書き出す"
+    )]
+    chart: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -47,6 +55,9 @@ fn run(cli: Cli) -> Result<()> {
     let agent = http::agent();
     let hourly = weather::fetch(&agent, &config, reference)?;
     let analysis = pressure::analyze(&hourly, reference)?;
+    if let Some(path) = cli.chart {
+        chart::write_png(&hourly, reference, config.timezone, &path)?;
+    }
     let report = slack::Report::new(&analysis, &config.location_name, config.timezone);
 
     match webhook {
