@@ -1,7 +1,7 @@
 use std::fmt::Write as _;
 
 use anyhow::{Result, bail, ensure};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use chrono_tz::Tz;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -40,8 +40,8 @@ impl Report {
             reference_local: local_time(analysis.reference, timezone),
             alert: analysis.alert,
             current_hpa: analysis.current.rounded_hpa(),
-            past_lines: interval_lines(&analysis.past),
-            future_lines: interval_lines(&analysis.future),
+            past_lines: interval_lines(&analysis.past, analysis.reference, timezone),
+            future_lines: interval_lines(&analysis.future, analysis.reference, timezone),
             max_drop: window_text(analysis.max_drop.as_ref(), timezone),
             max_rise: window_text(analysis.max_rise.as_ref(), timezone),
             large_rise: analysis
@@ -258,16 +258,18 @@ fn ensure_ok(ok: bool, error: Option<&str>) -> Result<()> {
     }
 }
 
-fn interval_lines(intervals: &[IntervalChange]) -> String {
+fn interval_lines(intervals: &[IntervalChange], reference: DateTime<Utc>, timezone: Tz) -> String {
     let mut text = String::new();
     for (index, interval) in intervals.iter().enumerate() {
         if index > 0 {
             text.push('\n');
         }
+        let time = reference + TimeDelta::hours(interval.offset_hours);
         write!(
             text,
-            "{:+}h: {:.1} hPa（差分 {:+.1} hPa）",
+            "{:+}h（{}）: {:.1} hPa（差分 {:+.1} hPa）",
             interval.offset_hours,
+            local_time(time, timezone),
             interval.pressure.rounded_hpa(),
             interval.change.hpa()
         )
@@ -312,7 +314,7 @@ struct ApiStatus {
 mod tests {
     use super::*;
     use crate::pressure::{HourlyPressure, Pressure, analyze};
-    use chrono::{TimeDelta, TimeZone};
+    use chrono::TimeZone;
 
     fn sample_report() -> Report {
         let reference = Utc.with_ymd_and_hms(2026, 1, 1, 9, 0, 0).unwrap();
@@ -336,16 +338,16 @@ mod tests {
     #[test]
     fn generates_rich_block_kit_complete_upload_body() {
         let report = sample_report();
-        let past = "-24h: 1037.2 hPa（差分 -24.0 hPa）\n\
-                    -12h: 1025.2 hPa（差分 -12.0 hPa）\n\
-                    -6h: 1019.2 hPa（差分 -6.0 hPa）\n\
-                    -3h: 1016.2 hPa（差分 -3.0 hPa）\n\
-                    -1h: 1014.2 hPa（差分 -1.0 hPa）";
-        let future = "+1h: 1012.2 hPa（差分 -1.0 hPa）\n\
-                      +3h: 1010.2 hPa（差分 -3.0 hPa）\n\
-                      +6h: 1007.2 hPa（差分 -6.0 hPa）\n\
-                      +12h: 1013.2 hPa（差分 +0.0 hPa）\n\
-                      +24h: 1025.2 hPa（差分 +12.0 hPa）";
+        let past = "-24h（2025-12-31 18:00 JST）: 1037.2 hPa（差分 -24.0 hPa）\n\
+                    -12h（2026-01-01 06:00 JST）: 1025.2 hPa（差分 -12.0 hPa）\n\
+                    -6h（2026-01-01 12:00 JST）: 1019.2 hPa（差分 -6.0 hPa）\n\
+                    -3h（2026-01-01 15:00 JST）: 1016.2 hPa（差分 -3.0 hPa）\n\
+                    -1h（2026-01-01 17:00 JST）: 1014.2 hPa（差分 -1.0 hPa）";
+        let future = "+1h（2026-01-01 19:00 JST）: 1012.2 hPa（差分 -1.0 hPa）\n\
+                      +3h（2026-01-01 21:00 JST）: 1010.2 hPa（差分 -3.0 hPa）\n\
+                      +6h（2026-01-02 00:00 JST）: 1007.2 hPa（差分 -6.0 hPa）\n\
+                      +12h（2026-01-02 06:00 JST）: 1013.2 hPa（差分 +0.0 hPa）\n\
+                      +24h（2026-01-02 18:00 JST）: 1025.2 hPa（差分 +12.0 hPa）";
         let drop = "-6.0 hPa（2026-01-01 18:00 JST 〜 2026-01-02 00:00 JST）";
         let rise = "+6.0 hPa（2026-01-02 00:00 JST 〜 2026-01-02 06:00 JST）";
         assert_eq!(

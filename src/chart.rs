@@ -5,12 +5,17 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
 use chrono_tz::Tz;
-use plotters::{prelude::*, series::DashedLineSeries};
+use plotters::{
+    prelude::*,
+    series::DashedLineSeries,
+    style::text_anchor::{HPos, Pos, VPos},
+};
 use tempfile::NamedTempFile;
 
 use crate::pressure::{HORIZON_HOURS, HourlyPressure};
 
 const PNG_SIZE: (u32, u32) = (1200, 680);
+const CLOCK_LABEL_TOP: i32 = 26;
 const FONT_FAMILY: &str = if cfg!(target_os = "macos") {
     "Hiragino Sans"
 } else {
@@ -57,6 +62,18 @@ fn chart_points(hourly: &HourlyPressure, reference: DateTime<Utc>) -> Result<Vec
             Ok((offset, pressure.hpa()))
         })
         .collect()
+}
+
+fn hour_label(offset: i32) -> String {
+    match offset {
+        0 => "0h".into(),
+        offset => format!("{offset:+}h"),
+    }
+}
+
+fn clock_label(reference: DateTime<Tz>, offset: i32) -> String {
+    let time = reference + TimeDelta::hours(i64::from(offset));
+    time.format("%m/%d %H:%M").to_string()
 }
 
 fn draw_png(points: &[(i32, f64)], reference: DateTime<Tz>, output: &Path) -> Result<()> {
@@ -107,11 +124,12 @@ fn draw_png(points: &[(i32, f64)], reference: DateTime<Tz>, output: &Path) -> Re
     ))?;
 
     let body = root.margin(146, 58, 10, 42);
+    let label_hours: Vec<i32> = (-horizon..=horizon).step_by(6).collect();
     let mut chart = ChartBuilder::on(&body)
         .x_label_area_size(66)
         .y_label_area_size(78)
         .build_cartesian_2d(
-            (-horizon - 1..horizon + 1).with_key_points((-horizon..=horizon).step_by(6).collect()),
+            (-horizon - 1..horizon + 1).with_key_points(label_hours.clone()),
             pressure_range.clone(),
         )?;
     chart.draw_series(std::iter::once(Rectangle::new(
@@ -122,10 +140,7 @@ fn draw_png(points: &[(i32, f64)], reference: DateTime<Tz>, output: &Path) -> Re
         .configure_mesh()
         .disable_x_mesh()
         .y_labels(7)
-        .x_label_formatter(&|hour| match *hour {
-            0 => "0h".into(),
-            hour => format!("{hour:+}h"),
-        })
+        .x_label_formatter(&|hour| hour_label(*hour))
         .axis_style(RGBColor(172, 188, 205))
         .bold_line_style(RGBColor(220, 229, 238))
         .light_line_style(TRANSPARENT)
@@ -134,6 +149,14 @@ fn draw_png(points: &[(i32, f64)], reference: DateTime<Tz>, output: &Path) -> Re
         .x_desc("基準時刻からの時間")
         .y_desc("海面更正気圧（hPa）")
         .draw()?;
+    for hour in label_hours {
+        let (x, y) = chart.backend_coord(&(hour, pressure_range.start));
+        root.draw(&Text::new(
+            clock_label(reference, hour),
+            (x, y + CLOCK_LABEL_TOP),
+            text(17, &muted).pos(Pos::new(HPos::Center, VPos::Top)),
+        ))?;
+    }
     chart.draw_series(std::iter::once(PathElement::new(
         [(0, pressure_range.start), (0, pressure_range.end)],
         RGBColor(129, 148, 167).stroke_width(2),
@@ -197,6 +220,18 @@ mod tests {
         assert_eq!(points[22], (-2, 1011.99));
         assert_eq!(points[24], (0, 1013.25));
         assert_eq!(points[48], (24, 1013.25));
+    }
+
+    #[test]
+    fn labels_each_offset_with_its_local_clock_time() {
+        let reference = reference().with_timezone(&chrono_tz::Asia::Tokyo);
+
+        assert_eq!(hour_label(-24), "-24h");
+        assert_eq!(hour_label(0), "0h");
+        assert_eq!(hour_label(6), "+6h");
+        assert_eq!(clock_label(reference, -24), "12/31 21:00");
+        assert_eq!(clock_label(reference, 0), "01/01 21:00");
+        assert_eq!(clock_label(reference, 6), "01/02 03:00");
     }
 
     #[test]
