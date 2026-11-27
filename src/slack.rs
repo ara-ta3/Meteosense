@@ -292,7 +292,7 @@ fn window_text(window: Option<&WindowChange>, timezone: Tz) -> String {
 
 fn local_time(time: DateTime<Utc>, timezone: Tz) -> String {
     time.with_timezone(&timezone)
-        .format("%Y-%m-%d %H:%M %Z")
+        .format("%Y-%m-%d %H:%M")
         .to_string()
 }
 
@@ -338,23 +338,23 @@ mod tests {
     #[test]
     fn generates_rich_block_kit_complete_upload_body() {
         let report = sample_report();
-        let past = "-24h（2025-12-31 18:00 JST）: 1037.2 hPa（差分 -24.0 hPa）\n\
-                    -12h（2026-01-01 06:00 JST）: 1025.2 hPa（差分 -12.0 hPa）\n\
-                    -6h（2026-01-01 12:00 JST）: 1019.2 hPa（差分 -6.0 hPa）\n\
-                    -3h（2026-01-01 15:00 JST）: 1016.2 hPa（差分 -3.0 hPa）\n\
-                    -1h（2026-01-01 17:00 JST）: 1014.2 hPa（差分 -1.0 hPa）";
-        let future = "+1h（2026-01-01 19:00 JST）: 1012.2 hPa（差分 -1.0 hPa）\n\
-                      +3h（2026-01-01 21:00 JST）: 1010.2 hPa（差分 -3.0 hPa）\n\
-                      +6h（2026-01-02 00:00 JST）: 1007.2 hPa（差分 -6.0 hPa）\n\
-                      +12h（2026-01-02 06:00 JST）: 1013.2 hPa（差分 +0.0 hPa）\n\
-                      +24h（2026-01-02 18:00 JST）: 1025.2 hPa（差分 +12.0 hPa）";
-        let drop = "-6.0 hPa（2026-01-01 18:00 JST 〜 2026-01-02 00:00 JST）";
-        let rise = "+6.0 hPa（2026-01-02 00:00 JST 〜 2026-01-02 06:00 JST）";
+        let past = "-24h（2025-12-31 18:00）: 1037.2 hPa（差分 -24.0 hPa）\n\
+                    -12h（2026-01-01 06:00）: 1025.2 hPa（差分 -12.0 hPa）\n\
+                    -6h（2026-01-01 12:00）: 1019.2 hPa（差分 -6.0 hPa）\n\
+                    -3h（2026-01-01 15:00）: 1016.2 hPa（差分 -3.0 hPa）\n\
+                    -1h（2026-01-01 17:00）: 1014.2 hPa（差分 -1.0 hPa）";
+        let future = "+1h（2026-01-01 19:00）: 1012.2 hPa（差分 -1.0 hPa）\n\
+                      +3h（2026-01-01 21:00）: 1010.2 hPa（差分 -3.0 hPa）\n\
+                      +6h（2026-01-02 00:00）: 1007.2 hPa（差分 -6.0 hPa）\n\
+                      +12h（2026-01-02 06:00）: 1013.2 hPa（差分 +0.0 hPa）\n\
+                      +24h（2026-01-02 18:00）: 1025.2 hPa（差分 +12.0 hPa）";
+        let drop = "-6.0 hPa（2026-01-01 18:00 〜 2026-01-02 00:00）";
+        let rise = "+6.0 hPa（2026-01-02 00:00 〜 2026-01-02 06:00）";
         assert_eq!(
             report.text(),
             format!(
                 "Meteosense | Sample Location\n\n\
-                 2026-01-01 18:00 JST\n警戒レベル（気圧変化）: 警戒\n現在（0h）の推定海面更正気圧: 1013.2 hPa\n\n\
+                 2026-01-01 18:00\n警戒レベル（気圧変化）: 警戒\n現在（0h）の推定海面更正気圧: 1013.2 hPa\n\n\
                  過去の気圧変化（モデル値）\n差分 = 現在の気圧 − 各時点の気圧\n{past}\n\n\
                  今後の気圧変化（予報）\n差分 = 各時点の気圧 − 現在の気圧\n{future}\n\n\
                  今後24時間の最大6時間低下量\n{drop}\n\n今後24時間の最大6時間上昇量\n{rise}\n\
@@ -374,10 +374,10 @@ mod tests {
                     {
                         "type": "section",
                         "fields": [
-                            {"type": "mrkdwn", "text": "*基準時刻*\n2026-01-01 18:00 JST"},
+                            {"type": "mrkdwn", "text": "*基準時刻*\n2026-01-01 18:00"},
                             {"type": "mrkdwn", "text": "*警戒レベル*\n*警戒*"},
                             {"type": "mrkdwn", "text": "*現在の気圧（0h）*\n`1013.2` hPa"},
-                            {"type": "mrkdwn", "text": "*最大6時間低下*\n-6.0 hPa（2026-01-01 18:00 JST 〜 2026-01-02 00:00 JST）"}
+                            {"type": "mrkdwn", "text": "*最大6時間低下*\n-6.0 hPa（2026-01-01 18:00 〜 2026-01-02 00:00）"}
                         ]
                     },
                     {"type": "divider"},

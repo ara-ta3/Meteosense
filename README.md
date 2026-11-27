@@ -33,7 +33,7 @@ cargo build --locked --release
 | `METEOSENSE_LATITUDE` | 緯度。−90から90まで |
 | `METEOSENSE_LONGITUDE` | 経度。−180から180まで |
 | `METEOSENSE_LOCATION_NAME` | 通知に表示する地点名。130文字以内 |
-| `METEOSENSE_TIMEZONE` | 表示用のIANAタイムゾーン。省略時は `Asia/Tokyo` |
+| `METEOSENSE_TIMEZONE` | 表示用のIANAタイムゾーン。省略時は日本時間の `Asia/Tokyo`。時刻の表示にはタイムゾーン名を付けない |
 | `SLACK_BOT_TOKEN` | SlackアプリのBot User OAuth Token（`xoxb-...`）。通常実行時に必須 |
 | `SLACK_CHANNEL_ID` | 投稿先チャンネルのID（`C`または`G`で始まる）。通常実行時に必須 |
 
@@ -76,7 +76,7 @@ Plottersで、Open-Meteoから取得した差分計算前の毎時気圧49点を
 `Pressure notifications` ワークフローは、デフォルトブランチに反映されると毎時5分（UTC）に起動し、Slackへ通知する。リポジトリの **Settings → Secrets and variables → Actions** で次の値を設定する。
 
 - **Secrets** に `METEOSENSE_LATITUDE`、`METEOSENSE_LONGITUDE`、`METEOSENSE_LOCATION_NAME`、`SLACK_BOT_TOKEN`、`SLACK_CHANNEL_ID` を登録する。
-- 表示タイムゾーンを変更する場合は **Variables** に `METEOSENSE_TIMEZONE` を登録する。省略時は `Asia/Tokyo` を使う。
+- 表示タイムゾーンを変更する場合は **Variables** に `METEOSENSE_TIMEZONE` を登録する。省略時は日本時間の `Asia/Tokyo` を使う。
 - 以前の `SLACK_WEBHOOK_URL` は使わない。グラフ付き投稿のため Bot Token とチャンネルIDに置き換える。
 
 Actionsから手動実行しても、定期実行と同じ設定でSlackへ投稿する。定期実行は混雑時に遅延・欠落する場合があり、公開リポジトリで60日間アクティビティがないと自動停止する。[GitHub Actionsのスケジュール仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)

@@ -99,7 +99,7 @@ fn draw_png(points: &[(i32, f64)], reference: DateTime<Tz>, output: &Path) -> Re
     root.draw(&Text::new(
         format!(
             "{} 基準・現在 {:.1} hPa・1時間ごと",
-            reference.format("%Y-%m-%d %H:%M %Z %:z"),
+            reference.format("%Y-%m-%d %H:%M"),
             current.1,
         ),
         (89, 80),
